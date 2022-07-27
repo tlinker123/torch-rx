@@ -1,0 +1,22 @@
+FEATURE PARAMETERS
+
+ETA OUTER LOOP, RS INNER LOOP
+
+(MODEL_TYPE_INFO)
+     2
+H     1.007940 H.model_scripted.pt
+N    14.006740 N.model_scripted.pt
+(ETA_RADIAL)
+     2
+    0.500000    1.000000
+(RS_RADIAL)
+     3
+    0.800000    1.000000    1.700000
+(EMIN_in_train)
+-4.854125022888184
+(EMAX_in_train)
+-4.739758491516113
+(FeatMax_in_train)
+1.3878694772720337
+(FeatMin_in_train)
+0.6873012781143188
