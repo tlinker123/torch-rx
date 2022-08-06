@@ -27,18 +27,18 @@ def main() :
 	#currently only radial feature vector
 	# for PTO
 ####################################################################################
-	#eta=(torch.tensor([0.5,1.0,3.0]))
-	#RS = (torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]))
-	#RC=7.5
-	#MAXNEIGHBORS=400
-	#MAX_ATOMS_PER_FRAME=500
+	eta=(torch.tensor([0.5,1.0,3.0]))
+	RS = (torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]))
+	RC=7.5
+	MAXNEIGHBORS=400
+	MAX_ATOMS_PER_FRAME=320
 ####################################################################################
 	# for NH3 molecule
-	eta=(torch.tensor([0.5,1.0]))
-	RS = (torch.tensor([0.8,1.0,1.7]))
-	RC=2.5
-	MAXNEIGHBORS=10
-	MAX_ATOMS_PER_FRAME=10
+	#eta=(torch.tensor([0.5,1.0]))
+	#RS = (torch.tensor([0.8,1.0,1.7]))
+	#RC=2.5
+	#MAXNEIGHBORS=10
+	#MAX_ATOMS_PER_FRAME=10
 ####################################################################################
 	#Atomic Energies are stored in atomicE to get cohesive energy
 	# Character types are converted to numeric with type_numeric
@@ -49,13 +49,13 @@ def main() :
 	#O   -3.52014750
 
 ####################################################################################
-	#atomicE={'Pb'  : -72.60873748,
-	#          'O'  :-11.22479073,
-	#          'Ti' :-3.52014750
-	#	}
-	#type_numeric={'Pb': 0,
-	#	       'Ti': 1,
-	#		'O': 2 }		
+	atomicE={'Pb'  : -72.60873748,
+	          'O'  :-11.22479073,
+	          'Ti' :-3.52014750
+		}
+	type_numeric={'Pb': 0,
+		       'Ti': 1,
+			'O': 2 }		
 ####################################################################################
 	# Ex NH3 molecule 
 ####################################################################################
@@ -63,12 +63,12 @@ def main() :
 	#N   -0.03591556
 
 ####################################################################################
-	atomicE={'H'  : -0.02679137,
-		  'N'  :-0.03591556
-		}
-	type_numeric={'H': 0,
-		       'N': 1,
-	}
+#	atomicE={'H'  : -0.02679137,
+#		  'N'  :-0.03591556
+#		}
+#	type_numeric={'H': 0,
+#		       'N': 1,
+#	}
 ####################################################################################
 
 	# Now code for creating and saving feature vectors 
@@ -81,7 +81,9 @@ def main() :
 	if(lxsf) :
 		tstart=time.time()
 		print('Starting Feature Creation : ')
-		feature_size=eta.size()[0]*RS.size()[0]
+		ntypes=len(type_numeric)
+		feature_size=eta.size()[0]*RS.size()[0]*ntypes
+		print('Feature Size ' +str(feature_size))
 		read_file=open(infile_xsf,'r')
 		line=read_file.readline()
 		line=line.strip().split()
@@ -103,6 +105,10 @@ def main() :
 			fname=line[0]
 			frame=frame_data_and_features_from_xsf(fname,eta,RS,RC,MAXNEIGHBORS,atomicE,type_numeric)
 			print('Packing..')
+			max_feature=torch.max(frame['features'])
+			min_feature=torch.min(frame['features'])
+			print('Max feature : ' +str(max_feature.item()))
+			print('Min feature : ' +str(min_feature.item()))
 			tpack_s=time.time()
 			energies[i]=frame['Energy']
 			natoms_in_frame[i]=frame['natoms']
@@ -166,12 +172,15 @@ def frame_data_and_features_from_xsf (fname,eta,RS,RC,MAXNEIGHBORS,atomicE,type_
 	del frame
 	#print(forces)
 
-	feature_size=eta.size()[0]*RS.size()[0]
+	ntypes=len(type_numeric)
+	feature_per_type=eta.size()[0]*RS.size()[0]
+	feature_size=feature_per_type*ntypes
 	features=torch.zeros((natoms,feature_size),dtype=torch.float64)
 	feature_jacobian=torch.zeros((natoms,natoms,feature_size,3),dtype=torch.float64)
 
 	print('feature ..')
-	get_feature_vectors_and_jacobians(recip,Hmat,natoms,eta,RC,RS,features,feature_jacobian,nbrlist)
+	get_feature_vectors_and_jacobians(recip,Hmat,natoms,eta,RC,RS,features,feature_jacobian,nbrlist,
+						feature_types,ntypes,feature_per_type)
 	#myfeatures=features
 	#myforces=forces
 	#myfeature_jacobian=feature_jacobian
@@ -185,7 +194,8 @@ def frame_data_and_features_from_xsf (fname,eta,RS,RC,MAXNEIGHBORS,atomicE,type_
 		'features': features,'feature_types':feature_types, 'type_numeric':type_numeric	,
 	 	'natoms': natoms		}
 	return(d)
-def get_feature_vectors_and_jacobians(recip,Hmat,natoms,eta,RC,RS,features,feature_jacobian,nbrlist) :
+def get_feature_vectors_and_jacobians(recip,Hmat,natoms,eta,RC,RS,features,feature_jacobian,nbrlist,
+					feature_types,ntypes,feature_per_type) :
 	for i in range(natoms):
 		ifeat=0
 		lastneighbor=nbrlist[i,0]+1
@@ -208,30 +218,48 @@ def get_feature_vectors_and_jacobians(recip,Hmat,natoms,eta,RC,RS,features,featu
 		for eta_ in eta :
 			for RS_ in RS :
 				Radial_Feature_and_deriv(rij,dr,i,eta_,RC,RS_,nbrlist,natoms,ifeat,
-					features,feature_jacobian)
+					features,feature_jacobian,feature_types,ntypes,feature_per_type)
 				#features[i,ifeat]=f
 				#feature_jacobian[:,:,ifeat,:]=feature_jacobian[:,:,ifeat,:]+fd
 				ifeat=ifeat+1
 def Radial_Feature_and_deriv(rij,dr,i,eta,RC,RS,nbrlist,natoms,ifeat,features,
-		feature_jacobian) : 
-
+		feature_jacobian,feature_types,ntypes,feature_per_type) : 
+	my_pi=3.14159265358979323846
+	itype=feature_types[i]
 	lastneighbor=nbrlist[i,0]+1
 	firstneighbor=1
 	nbrlist_=nbrlist[i,firstneighbor:lastneighbor].clone().detach()
+	nbr_type=feature_types[nbrlist_]
+	for jtype in range(ntypes) :
+		stride_j=jtype*feature_per_type
+	#	stride_i=itype*feature_per_type
+		bool_tensor=torch.eq(nbr_type,jtype)
+		rij_type=rij[bool_tensor].clone().detach()
+		dr_type=dr[bool_tensor].clone().detach()
+		nbrlist_type=nbrlist_[bool_tensor].clone().detach()
+		rij_type.requires_grad_(requires_grad=True) 
 ##VECTOR IMPLEMNTATION 
-	feature=torch.sum(torch.exp(-eta*(rij-RS)**2)*0.5*torch.cos(rij/RC))
-	feature.backward()
-	features[i,ifeat]=feature.clone().detach()
-	rnormal=torch.div(rij.grad,rij)
-	f_d=torch.transpose(torch.transpose(dr,0,1)*rnormal,0,1)
-	f_i=torch.sum(f_d,dim=0)
-	feature_jacobian[i,i,ifeat,:]=f_i
-	feature_jacobian[i,nbrlist_,ifeat,:]=-1.0*f_d[:,:].clone().detach()
-	#j1=0
-	#for j in nbrlist_.tolist() :
-	#	feature_jacobian[i,j,:]=-1.0*f_d[j1,:].clone().detach()
-	#	j1=j1+1
-	rij.grad.zero_()
+		exp_rij=torch.exp(-eta*(rij_type-RS)**2)
+		func_cut=0.5*(torch.cos(my_pi*rij_type/RC)+1.0)
+		feature=torch.sum(exp_rij*func_cut)
+		feature.backward()
+		#print(ifeat+stride)
+		features[i,ifeat+stride_j]=feature.clone().detach()
+		rnormal=torch.div(rij_type.grad,rij_type)
+		f_d=torch.transpose(torch.transpose(dr_type,0,1)*rnormal,0,1)
+		f_i=torch.sum(f_d,dim=0)
+		feature_jacobian[i,i,ifeat+stride_j,:]=f_i
+		#print(nbrlist_type)
+		feature_jacobian[i,nbrlist_type,ifeat+stride_j,:]=-1.0*f_d[:,:].clone().detach()
+		#j1=0
+		#for j in nbrlist_.tolist() :
+		#	feature_jacobian[i,j,:]=-1.0*f_d[j1,:].clone().detach()
+		#	j1=j1+1
+		#rij.grad.zero_()
+	#print(features[i,:])
+	#print(feature_jacobian[i,0:64,ifeat,:])
+	#print(feature_jacobian[i,65:320,ifeat,:])
+	#raise('stop')
 ##LOOP IMPLEMNTATION 
 #	else :
 #		for j in nbrlist_.tolist() :

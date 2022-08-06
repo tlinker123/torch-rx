@@ -18,7 +18,7 @@ def main() :
 	# Input Parameters
 	d=torch.load('TRAINING-DICT.pt') 
 	model_number=199 # which model 
-	model_directory='./data05/' # Which directory 
+	model_directory='./data06/' # Which directory 
 
 	#Write Feature Parameters to input file for MD simmulation
 	##########################################################################
@@ -27,10 +27,10 @@ def main() :
 	RS=d['RS'].clone().detach()
 	RC=d['RC']
 	type_numeric=d['type_numeric'].copy()
-
-	feature_size=eta.size()[0]*RS.size()[0]
-
 	ntypes=len(type_numeric)
+
+	feature_size=eta.size()[0]*RS.size()[0]*ntypes
+
 	#print(ntypes)
 	types=list(type_numeric.keys())
 	param_file=open('FEATURE-PARAM.in','w')
@@ -59,17 +59,28 @@ def main() :
 		param_file.write( '%12.6f' %(RS[i]))
 	param_file.write('\n')
 	bias_file=open(model_directory+'bias.txt','r')
+	mylist=list()
 	for i in range(4) :
 		line=bias_file.readline()
 		line=line.strip().split()
 		s1='('+line[0]+'_in_train)'
 		s2=line[1]
+		mylist.append(float(s2))
 		param_file.write( '%s\n' %(s1))
 		param_file.write( '%s\n' %(s2))
 	
-
+	Emin=mylist[0]
+	Emax=mylist[1]
+	FeatMax=mylist[2]
+	FeatMin=mylist[3]
+	PATH=(model_directory+types[itype]+'.model.'+str(model_number).zfill(10))
 	for itype in range(ntypes) :
-		my_model=torch.load(model_directory+types[itype]+'.model.'+str(model_number).zfill(10))
+		my_model=atomic_model(feature_size,torch.tensor(Emax),
+						torch.tensor(Emin),
+						torch.tensor(FeatMax),
+						torch.tensor(FeatMin))
+		checkpoint = torch.load(PATH)
+		my_model.load_state_dict(checkpoint['model_state_dict'])
 		model_scripted = torch.jit.script(my_model) # Export to TorchScript
 		model_scripted.save(types[itype]+'.model_scripted.pt') # Save
 	
