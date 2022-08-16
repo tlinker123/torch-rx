@@ -7,7 +7,8 @@ import time
 ########################################################################################
 # Main Training Loop function
 ########################################################################################
-def train_ffw_energy(atomic_model,nepochs,batch_size,per_train,lstart,optimizer_function,indices_frame,natoms_in_frame_type,
+def train_ffw_energy(atomic_model,learning_rate,nepochs,batch_size,per_train,lstart,
+	optimizer_function,indices_frame,natoms_in_frame_type,
 	natoms_in_frame,pE,pF,ntypes,types,energies,forces,feature_size,features,feature_jacobian,feature_types,nframes,lVerbose,
 	lbatch_eval_test,MAX_NATOMS_PER_FRAME,ldump) :
 ########################################################################################
@@ -35,7 +36,7 @@ def train_ffw_energy(atomic_model,nepochs,batch_size,per_train,lstart,optimizer_
 	RSME_file.close()
 	#torch.autograd.set_detect_anomaly(True) # For Debugging, 10X slowdown if true
 	#torch.set_num_interop_threads(4) # Inter-op parallelism
-	#torch.set_num_threads(4) 
+	torch.set_num_threads(16) 
 	bias_file=open('./data/bias.txt','w')
 	Emin=torch.min(energies).item()
 	Emax=torch.max(energies).item()
@@ -50,6 +51,7 @@ def train_ffw_energy(atomic_model,nepochs,batch_size,per_train,lstart,optimizer_
 	#print(features.size())
 	print('Starting training for energy model with force prediction')
 	print('------------------------------------------------------')
+	print('Feature Size: ' + str(feature_size))
 	print('Emin : ' + str(Emin) + ' eV/atom')
 	print('Emax : ' + str(Emax) + ' eV/atom')
 	print('FeatMax : ' + str(FeatMax) )
@@ -68,6 +70,7 @@ def train_ffw_energy(atomic_model,nepochs,batch_size,per_train,lstart,optimizer_
 	log_file.write('Starting training for energy model with force prediction\n')
 	log_file.write('------------------------------------------------------\n')
 	log_file.write('------------------------------------------------------\n')
+	log_file.write('Feature Size: ' + str(feature_size)+'\n')
 	log_file.write('Emin : ' + str(Emin) + ' eV/atom\n')
 	log_file.write('Emax : ' + str(Emax) + ' eV/atom\n')
 	log_file.write('FeatMax : ' + str(FeatMax) +'\n' )
@@ -98,6 +101,10 @@ def train_ffw_energy(atomic_model,nepochs,batch_size,per_train,lstart,optimizer_
 		train=shuffled_frames[0:ntrain].clone().detach()
 		test=shuffled_frames[(ntrain):nframes].clone().detach()
 		del shuffled_frames
+		#loaded_frames=torch.load('FRAMES-SAVED.pt')
+		#train=loaded_frames['train'].clone().detach()
+		#test=loaded_frames['test'].clone().detach()
+		#del loaded_frames
 		torch.save({'train':train,'test':test} ,'FRAMES-SAVED.pt' )
 		models=nn.ModuleList()
 		#optimizers=list()
@@ -109,7 +116,10 @@ def train_ffw_energy(atomic_model,nepochs,batch_size,per_train,lstart,optimizer_
 		for i in range(ntypes) :
 			#mymodel=atomic_model()
 			#models.append(atomic_model_normal(feature_size,Emin,Emax))
-			models.append(atomic_model(feature_size))
+			models.append(atomic_model(feature_size,torch.tensor(Emax),
+							torch.tensor(Emin),
+							torch.tensor(FeatMax),
+							torch.tensor(FeatMin)))
 			print('Initalized model for : '+str(types[i]))
 			print(models[i])
 			log_file.write('Initalized model for : '+str(types[i])+'\n\n')
@@ -117,6 +127,11 @@ def train_ffw_energy(atomic_model,nepochs,batch_size,per_train,lstart,optimizer_
 			log_file.write('\n\n')
 			#optimizers.append(optimizer_function(models[i]))
 		optimizer=optimizer_function(models)
+		print('optimizer')
+		print(optimizer_function)
+		log_file.write('optimizer')
+		log_file.write(str(optimizer_function))
+		log_file.write('\n\n')
 		log_file.close()
 	else :
 		#return 
@@ -134,7 +149,14 @@ def train_ffw_energy(atomic_model,nepochs,batch_size,per_train,lstart,optimizer_
 		for i in range(ntypes) :
 			#mymodel=atomic_model()
 			#models.append(atomic_model_normal(feature_size,Emin,Emax))
-			my_model=torch.load('./'+types[i]+'.model.RESTART')
+			#my_model=torch.load('./'+types[i]+'.model.RESTART')
+			PATH='./'+types[i]+'.model.RESTART'
+			my_model=atomic_model(feature_size,torch.tensor(Emax),
+                                                        torch.tensor(Emin),
+                                                        torch.tensor(FeatMax),
+                                                        torch.tensor(FeatMin))
+			checkpoint = torch.load(PATH)
+			my_model.load_state_dict(checkpoint['model_state_dict'])
 			models.append(my_model)
 			print('Loaded  model for : '+str(types[i]))
 			print(models[i])
@@ -143,8 +165,19 @@ def train_ffw_energy(atomic_model,nepochs,batch_size,per_train,lstart,optimizer_
 			log_file.write('\n\n')
 			#optimizers.append(optimizer_function(models[i]))
 		optimizer=optimizer_function(models)
+		optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+		models.train()
+		del checkpoint
+		print('optimizer')
+		print(optimizer_function)
+		log_file.write('optimizer')
+		log_file.write(str(optimizer_function))
+		log_file.write('\n\n')
 		log_file.close()
 ########################################################################################
+	for g in optimizer.param_groups:
+		g['lr'] = learning_rate
 # Output train/test set decomposition 
 	nframes_train=train.size()[0]
 	nframes_test=test.size()[0]
@@ -283,7 +316,11 @@ def train_ffw_energy(atomic_model,nepochs,batch_size,per_train,lstart,optimizer_
 							test_ERSME, CEx_Test, test_FRSME, CFx_Test))
 		RSME_file.close()
 		for itype in range(ntypes) :
-			torch.save(models[itype],'./data/'+types[itype]+'.model.'+str(i).zfill(10))
+			torch.save({
+            			'model_state_dict': models[itype].state_dict(),
+            			'optimizer_state_dict': optimizer.state_dict(),
+           			 }, './data/'+types[itype]+'.model.'+str(i).zfill(10))
+			#torch.save(models[itype],'./data/'+types[itype]+'.model.'+str(i).zfill(10))
 		print('-----------------------------------------------')
 		del frames
 		del loss
@@ -417,9 +454,9 @@ def model_energy_force_batch(features,feature_types,feature_jacobian,ntypes,fram
 		# Forward pass
 		indices=get_indices_type_frames(indices_frame,k,frames,feature_types)
 		x_in=Variable(features[indices,:].clone(),requires_grad=True)
-		x2=biasinv(x_in,FeatMax,FeatMin)
-		y_pred=models[k](x2)
-		y_pred=bias(y_pred,Emax,Emin)
+		#x2=biasinv(x_in,FeatMax,FeatMin)
+		y_pred=models[k](x_in)
+		#y_pred=bias(y_pred,Emax,Emin)
 		#############################################################
 		# Storing frame lookup  for gradient
 		batch_natoms_in_frame=natoms_in_frame_type[frames,k]

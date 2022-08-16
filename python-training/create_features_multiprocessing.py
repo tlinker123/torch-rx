@@ -2,7 +2,9 @@ import numpy as np
 import torch
 from torch.autograd import Variable
 from torch import nn
-from xsftools import read_xsf
+import torch.multiprocessing as mp
+#from contextlib import closing
+from xsftools_multiprocessing import read_xsf
 import time
 
 def main() :
@@ -14,6 +16,7 @@ def main() :
 		    # will be added soon	
 		    # Extended xyz support will also be added		
 	infile_xsf='./fnames'  # Path to file with xsf file names for training data
+	pool_size= 64 	       #Number of frames to be computed in parrallel with multiprocesing
 ####################################################################################
 	# File format is 
 	# nfiles 
@@ -79,8 +82,23 @@ def main() :
 	# Main loop
 ####################################################################################
 	if(lxsf) :
+		my_th0= 1              # Threads for torch intra-ops Must be 1 or memory leak
+		my_th1= 1               # Threads for torch inter-ops Must be 1 or memory leak
 		tstart=time.time()
 		print('Starting Feature Creation : ')
+		ncores = mp.cpu_count()
+		print('Total of %d cores' %(ncores))
+		th0=torch.get_num_threads()
+		th1=torch.get_num_interop_threads()
+		print('Threads 0 Default : '  +str(th0))
+		print('Threads 1 Default : '  +str(th1))
+		torch.set_num_threads(my_th0)
+		torch.set_num_interop_threads(my_th1)
+		th0=torch.get_num_threads()
+		th1=torch.get_num_interop_threads()
+		print('Threads 0 Set : '  +str(th0))
+		print('Threads 1 Set : '  +str(th1))
+		print('Pool size of %d cores' %(pool_size))
 		ntypes=len(type_numeric)
 		feature_size=eta.size()[0]*RS.size()[0]*ntypes
 		print('Feature Size ' +str(feature_size))
@@ -98,33 +116,80 @@ def main() :
 		#the_mem=torch.cuda.memory_allocated()
 		#print(the_mem)
 		cptr=0
+		itotal=0
 		print('Nfiles : ' +str(nfiles))
+		fnames=list()
 		for i in range(nfiles) :
 			line=read_file.readline()
 			line=line.strip().split('\n')
 			fname=line[0]
-			frame=frame_data_and_features_from_xsf(fname,eta,RS,RC,MAXNEIGHBORS,atomicE,type_numeric)
+			fnames.append(fname)
+		read_file.close()
+		for i in range(0, nfiles,pool_size) :
+			#line=read_file.readline()
+			#line=line.strip().split('\n')
+			#fname=line[0]
+			tcomp_s=time.time()
+			myfnames=fnames[i:i+pool_size]
+			print('Feature Calc For : ')
+			print(myfnames)
+			input_dicts=list()
+			for j in range(len(myfnames)) :
+				d={'fname':myfnames[j],'eta':eta,'RS':RS ,
+                                    'RC':RC,'MAXNEIGHBORS':MAXNEIGHBORS,
+				     'atomicE':atomicE, 'type_numeric':type_numeric }
+				input_dicts.append(d.copy())
+
+			#pool = mp.Pool(processes=ncores)
+			with mp.Pool(pool_size) as pool :
+				myframes=pool.map(frame_data_and_features_from_xsf,input_dicts)
+				
+			#pool.join()
+			tcomp_e=time.time()
+			print('Time Compute Feature: ' +str(tcomp_e-tcomp_s) +'(s)')
+			
+			#frame=frame_data_and_features_from_xsf(fname,eta,RS,RC,MAXNEIGHBORS,atomicE,type_numeric)
 			print('Packing..')
-			max_feature=torch.max(frame['features'])
-			min_feature=torch.min(frame['features'])
-			print('Max feature : ' +str(max_feature.item()))
-			print('Min feature : ' +str(min_feature.item()))
 			tpack_s=time.time()
-			energies[i]=frame['Energy']
-			natoms_in_frame[i]=frame['natoms']
-			mynatom=natoms_in_frame[i]
-			for j in range(mynatom) :
-				forces[cptr,:]=frame['forces'][j,:].clone().detach()
-				features[cptr,:]=frame['features'][j,:].clone().detach()
-				feature_jacobian[cptr,0:mynatom,:,:]=frame['feature_jacobian'][j,0:mynatom,:,:].clone().detach()
-				feature_types[cptr]=frame['feature_types'][j].clone().detach()
-				cptr=cptr+1
+			for iframe in range(len(myframes)) :
+				print('Global Frame, Batch Frame : '+ str(itotal)+' , '+str(iframe))
+				frame=myframes[iframe]
+				#print(frame)
+				frame_features=torch.from_numpy(frame['features'])
+				frame_feature_jacobian=torch.from_numpy(frame['feature_jacobian'])
+				frame_forces=torch.from_numpy(frame['forces'])
+				#print(frame_features[0,0])
+				#print(frame_features[5,10])
+				#print(frame_feature_jacobian[0,0,0,0])
+				#print(frame_feature_jacobian[0,10,12,0])
+				max_feature=torch.max(frame_features)
+				min_feature=torch.min(frame_features)
+				print('Max feature : ' +str(max_feature.item()))
+				print('Min feature : ' +str(min_feature.item()))
+				energies[itotal]=frame['Energy']
+				print('Cohesive Energy/natoms ' +str(energies[itotal]) +' eV')
+				natoms_in_frame[itotal]=frame['natoms']
+				mynatom=natoms_in_frame[itotal]
+				for j in range(mynatom) :
+					forces[cptr,:]=frame_forces[j,:].clone().detach()
+					features[cptr,:]=frame_features[j,:].clone().detach()
+					feature_jacobian[cptr,0:mynatom,:,:]=frame_feature_jacobian[j,0:mynatom,:,:].clone().detach()
+					feature_types[cptr]=frame['feature_types'][j].clone().detach()
+					cptr=cptr+1
+				del frame
+				del frame_features
+				del frame_feature_jacobian
+				del frame_forces
+				itotal=itotal+1
 			tpack_e=time.time()
-			del frame
+			del myframes
+			
 			print('Time Pack : ' +str(tpack_e-tpack_s) +'(s)')
-			print('Current Memory Allocation' )
-			the_mem=torch.cuda.memory_allocated()
-			print(the_mem)
+			tbatch=(tpack_e-tpack_s)+(tcomp_e-tcomp_s)
+			print('Total Time Batch : ' +str(tbatch) +'(s)')
+			#print('Current Memory Allocation' )
+			#the_mem=torch.cuda.memory_allocated()
+			#print(the_mem)
 		
 		print('Packing and Writing to disc')
 		d = {'eta' :eta, 'RS': RS,'RC':RC,  'forces': forces[0:cptr,:], 'energies': energies,
@@ -135,8 +200,16 @@ def main() :
 		print('Done')
 		tend=time.time()
 		print('Total Time : ' +str(tend-tstart) +'(s)')
-def frame_data_and_features_from_xsf (fname,eta,RS,RC,MAXNEIGHBORS,atomicE,type_numeric) :
+def frame_data_and_features_from_xsf (input_dict) :
+	fname=input_dict['fname']
+	eta=input_dict['eta']
+	RS=input_dict['RS']
+	RC=input_dict['RC']
+	MAXNEIGHBORS=input_dict['MAXNEIGHBORS']
+	atomicE=input_dict['atomicE']
+	type_numeric=input_dict['type_numeric']
 	tsub=time.time()
+	tid_pool=mp.current_process()
 	frame=read_xsf(fname)
 	natoms=frame.natom
 	types_set=list(set(frame.types))
@@ -155,30 +228,41 @@ def frame_data_and_features_from_xsf (fname,eta,RS,RC,MAXNEIGHBORS,atomicE,type_
 	myEnergy=(frame.Energy-Eatom)/natoms
 	#print(feature_types)
 	#myfeature_types=feature_types
-	print('Cohesive Energy/natoms ' +str(myEnergy) +' eV')
+#	print('Cohesive Energy/natoms ' +str(myEnergy) +' eV')
 	#print('ghosting .. ;)')
 	#RC=7.5
 	#MAXNEIGHBORS=400
-	print('nbrlist ..')
+	#print('nbrlist ..')
 	#frame.linkedlist()
-	frame.get_nbr_list_ON2_pbc(MAXNEIGHBORS=MAXNEIGHBORS,RC=7.5)
+	frame.get_nbr_list_ON2_pbc(MAXNEIGHBORS=MAXNEIGHBORS,RC=RC)
+	#print('escape ..')
 	#frame.get_nbr_list_ON2(MAXNEIGHBORS=MAXNEIGHBORS)
-	pos=torch.from_numpy(frame.pos)
-	recip=torch.from_numpy(frame.recip)
-	Hmat=torch.from_numpy(frame.Hmat)
-	nbrlist=torch.from_numpy(frame.nbrlist)
-	nbrlist=nbrlist.type(torch.int64)
-	forces=torch.from_numpy(frame.forces)
+	pos=(frame.pos)
+	#print('copy01')
+	recip=(frame.recip)
+	#print('copy02')
+	Hmat=(frame.Hmat)
+	#print('copy03')
+	nbrlist=(frame.nbrlist)
+	#print('copy04')
+	forces=(frame.forces)
+	#print('copy05')
 	del frame
 	#print(forces)
 
+	#print('deleted')
 	ntypes=len(type_numeric)
+	#print('ntypes')
 	feature_per_type=eta.size()[0]*RS.size()[0]
+	#print('feature_per_type')
 	feature_size=feature_per_type*ntypes
-	features=torch.zeros((natoms,feature_size),dtype=torch.float64)
-	feature_jacobian=torch.zeros((natoms,natoms,feature_size,3),dtype=torch.float64)
+	#print('feature_size')
+	features=np.zeros((natoms,feature_size),dtype=np.float64)
+	#print('features')
+	feature_jacobian=np.zeros((natoms,natoms,feature_size,3),dtype=np.float64)
+	#print('feature_jacobian')
 
-	print('feature ..')
+	#print('feature ..')
 	get_feature_vectors_and_jacobians(recip,Hmat,natoms,eta,RC,RS,features,feature_jacobian,nbrlist,
 						feature_types,ntypes,feature_per_type)
 	#myfeatures=features
@@ -189,31 +273,37 @@ def frame_data_and_features_from_xsf (fname,eta,RS,RC,MAXNEIGHBORS,atomicE,type_
 	#print(feature_jacobian[0,:,:])
 	tend=time.time()
 
-	print('Time nbrlist and feature comp : ' +str(tend-tsub) +'(s)')
+	#print('Time nbrlist and feature comp : ' +str(tend-tsub) +'(s)')
 	d = {  'forces': forces ,'Energy': myEnergy, 'feature_jacobian' : feature_jacobian,
 		'features': features,'feature_types':feature_types, 'type_numeric':type_numeric	,
 	 	'natoms': natoms		}
+	#print('Packed')
 	return(d)
 def get_feature_vectors_and_jacobians(recip,Hmat,natoms,eta,RC,RS,features,feature_jacobian,nbrlist,
 					feature_types,ntypes,feature_per_type) :
 	for i in range(natoms):
 		ifeat=0
+		#print(nbrlist)
 		lastneighbor=nbrlist[i,0]+1
 		firstneighbor=1
-		nbrlist_=nbrlist[i,firstneighbor:lastneighbor].clone().detach()
+		nbrlist_=nbrlist[i,firstneighbor:lastneighbor]
 		#print(nbrlist_)
-		recipj=recip[nbrlist_.tolist(),:].clone().detach()
-		dr=recip[i,:]-recipj[:,:]
+		recipj=recip[nbrlist_.tolist(),:]
+		dr_=recip[i,:]-recipj[:,:]
 		#PBC still loop
 		for j in range(nbrlist[i,0]) :
 			for k in range(3) :
-				if(dr[j,k]>0.5) :
-					dr[j,k]=dr[j,k]-1.0
-				elif(dr[j,k]< -0.5) :
-					dr[j,k]=dr[j,k]+1.0
-			dr[j,:]=torch.matmul(Hmat,dr[j,:])
+				if(dr_[j,k]>0.5) :
+					dr_[j,k]=dr_[j,k]-1.0
+				elif(dr_[j,k]< -0.5) :
+					dr_[j,k]=dr_[j,k]+1.0
+			dr_[j,:]=np.matmul(Hmat,dr_[j,:])
 			
-		rij=Variable(torch.sqrt(torch.sum((dr)**2,dim=1)),requires_grad=True)
+		dr=torch.from_numpy(dr_)
+		rij_=np.sqrt(np.sum((dr_)**2,axis=1))
+		rij=torch.from_numpy(rij_)
+		#print('rij')
+		#raise('stop')
 		#print(i)
 		for eta_ in eta :
 			for RS_ in RS :
@@ -225,32 +315,41 @@ def get_feature_vectors_and_jacobians(recip,Hmat,natoms,eta,RC,RS,features,featu
 def Radial_Feature_and_deriv(rij,dr,i,eta,RC,RS,nbrlist,natoms,ifeat,features,
 		feature_jacobian,feature_types,ntypes,feature_per_type) : 
 	my_pi=3.14159265358979323846
+	#print('itype')
 	itype=feature_types[i]
 	lastneighbor=nbrlist[i,0]+1
+	#print('neighbor')
 	firstneighbor=1
-	nbrlist_=nbrlist[i,firstneighbor:lastneighbor].clone().detach()
+	nbrlist_=nbrlist[i,firstneighbor:lastneighbor]
+	#print('slice01')
 	nbr_type=feature_types[nbrlist_]
+	#print('slice02')
 	for jtype in range(ntypes) :
 		stride_j=jtype*feature_per_type
 	#	stride_i=itype*feature_per_type
 		bool_tensor=torch.eq(nbr_type,jtype)
-		rij_type=rij[bool_tensor].clone().detach()
+		#print('eq')
+		rij_type=rij[bool_tensor].clone()
+		#print('slice03')
 		dr_type=dr[bool_tensor].clone().detach()
-		nbrlist_type=nbrlist_[bool_tensor].clone().detach()
+		#print('slice04')
+		nbrlist_type=nbrlist_[bool_tensor.tolist()]
+		#print('slice05')
 		rij_type.requires_grad_(requires_grad=True) 
+		#print('slice06')
 ##VECTOR IMPLEMNTATION 
 		exp_rij=torch.exp(-eta*(rij_type-RS)**2)
 		func_cut=0.5*(torch.cos(my_pi*rij_type/RC)+1.0)
 		feature=torch.sum(exp_rij*func_cut)
 		feature.backward()
 		#print(ifeat+stride)
-		features[i,ifeat+stride_j]=feature.clone().detach()
+		features[i,ifeat+stride_j]=feature.clone().detach().numpy()
 		rnormal=torch.div(rij_type.grad,rij_type)
 		f_d=torch.transpose(torch.transpose(dr_type,0,1)*rnormal,0,1)
 		f_i=torch.sum(f_d,dim=0)
-		feature_jacobian[i,i,ifeat+stride_j,:]=f_i
+		feature_jacobian[i,i,ifeat+stride_j,:]=f_i.clone().detach().numpy()
 		#print(nbrlist_type)
-		feature_jacobian[i,nbrlist_type,ifeat+stride_j,:]=-1.0*f_d[:,:].clone().detach()
+		feature_jacobian[i,nbrlist_type,ifeat+stride_j,:]=-1.0*f_d[:,:].clone().detach().numpy()
 		#j1=0
 		#for j in nbrlist_.tolist() :
 		#	feature_jacobian[i,j,:]=-1.0*f_d[j1,:].clone().detach()
