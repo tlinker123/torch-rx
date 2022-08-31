@@ -47,7 +47,7 @@ torch-rx currently supports creation of Beheler and Parrinello Radial Style Feat
       - FeatMax : Max Feature Value in Training set
       - FeatMin : Min Feature Value in Training set
   3. In the main function the following training parameters can be adjusted 
-      	    - pF=0.1 #  Force weight in loss
+     - pF=0.1 #  Force weight in loss
 	    - pE=1.0  #  Energy weight in loss
 	    - learning_rate=0.0005 # Overides Learning Rate in optimizer
 	    - nepochs=200 # Number of epochs to perfrom
