@@ -59,7 +59,7 @@ torch-rx currently supports creation of Beheler and Parrinello Radial Style Feat
 	    - batch_size=50 # frames in batch
 	    - MAX_NATOMS_PER_FRAME=325 # Max atoms in training set +1 
    4. Restarting from previous run can be done by copying dumped model for each atom type from the data folder as TYPE.RESTART.pt 
-        - For example if you had and NH3 model you would copy the N and H dumped model you wanted restart from as N.RESTART.pt and H.RESTART.pt
+        - For example if you had an NH3 model you would copy the N and H dumped model you wanted restart from as N.RESTART.pt and H.RESTART.pt
         
   ## Creating Torch Script Files From Trained Models to run with C++ API
   
