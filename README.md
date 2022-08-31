@@ -47,7 +47,7 @@ torch-rx currently supports creation of Beheler and Parrinello Radial Style Feat
       - FeatMax : Max Feature Value in Training set
       - FeatMin : Min Feature Value in Training set
   3. In the main function the following training parameters can be adjusted 
-      - pF=0.1 #  Force weight in loss
+      	    - pF=0.1 #  Force weight in loss
 	    - pE=1.0  #  Energy weight in loss
 	    - learning_rate=0.0005 # Overides Learning Rate in optimizer
 	    - nepochs=200 # Number of epochs to perfrom
@@ -59,7 +59,7 @@ torch-rx currently supports creation of Beheler and Parrinello Radial Style Feat
 	    - batch_size=50 # frames in batch
 	    - MAX_NATOMS_PER_FRAME=325 # Max atoms in training set +1 
    4. Restarting from previous run can be done by copying dumped model for each atom type from the data folder as TYPE.RESTART.pt 
-        - For example if you had an NH3 model you would copy the N and H dumped model you wanted restart from as N.RESTART.pt and H.RESTART.pt
+        - For example if you had an NH3 model you would copy the N and H dumped model you wanted to restart from as N.RESTART.pt and H.RESTART.pt
         
   ## Creating Torch Script Files From Trained Models to run with C++ API
   
